@@ -12,6 +12,8 @@
     "configure:local": "node scripts/configure-local.mjs",
     "migrate": "node scripts/migrate-hrms.mjs",
     "seed:demo": "node scripts/seed-demo.mjs",
+    "demo:seed": "node --env-file=.env.demo scripts/seed-workspace-demo.mjs",
+    "demo:serve": "node --env-file=.env.demo src/server.js",
     "verify:demo": "node scripts/verify-demo.mjs",
     "audit:functions": "node scripts/audit-functions.mjs",
     "check:production": "node scripts/production-check.mjs",

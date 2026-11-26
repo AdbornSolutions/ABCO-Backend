@@ -20,6 +20,7 @@ import { employeeInput } from "./shared/employee-input.js";
 import { employeeImports } from "./modules/admin/imports.js";
 import { mfaRoutes, verifySecondFactor } from "./modules/auth/mfa.js";
 import { dashboardInsights } from "./modules/dashboard/insights.js";
+import { workspaceDashboardRoutes } from "./modules/dashboard/workspace.js";
 import { projectRoutes } from "./modules/extended/projects.js";
 import { trainingRoutes } from "./modules/extended/training.js";
 import { expenseRoutes } from "./modules/extended/expenses.js";
@@ -64,7 +65,11 @@ import { adminRoutes } from "./modules/admin/routes.js";
 import { recoveryRoutes } from "./modules/auth/recovery.js";
 import { attendanceRoutes } from "./modules/attendance/routes.js";
 
-export function createApp({ sessionStore, logLevel } = {}) {
+export function createApp({
+  sessionStore,
+  logLevel,
+  sessionCookieName = "abco.sid",
+} = {}) {
   const app = express();
   const dummyHash = argon2.hash(randomBytes(32).toString("hex"), {
     type: argon2.argon2id,
@@ -98,7 +103,7 @@ export function createApp({ sessionStore, logLevel } = {}) {
 
   app.use(
     session({
-      name: "abco.sid",
+      name: sessionCookieName,
       secret: process.env.SESSION_SECRET,
       resave: false,
       saveUninitialized: false,
@@ -353,7 +358,7 @@ export function createApp({ sessionStore, logLevel } = {}) {
       req.session.destroy((e) => (e ? reject(e) : resolve())),
     );
     res
-      .clearCookie("abco.sid", {
+      .clearCookie(sessionCookieName, {
         httpOnly: true,
         secure: production,
         sameSite: "strict",
@@ -711,6 +716,7 @@ export function createApp({ sessionStore, logLevel } = {}) {
   api.use(employeeImports());
   api.use(mfaRoutes());
   api.use(dashboardInsights());
+  api.use(workspaceDashboardRoutes());
   api.use(projectRoutes());
   api.use(trainingRoutes());
   api.use(expenseRoutes());

@@ -9,7 +9,10 @@ import "../src/app.js";
 import { storeDocument } from "../src/modules/documents/routes.js";
 
 const root = resolve(fileURLToPath(new URL("../", import.meta.url)));
-dotenv.config({ path: resolve(root, ".env"), quiet: true });
+dotenv.config({
+  path: resolve(root, process.env.DOTENV_CONFIG_PATH || ".env"),
+  quiet: true,
+});
 const namespace = "abco-demo-v1";
 const oid = (key) =>
   new mongoose.Types.ObjectId(
@@ -24,6 +27,45 @@ const day = (base, offset = 0) =>
     .slice(0, 10);
 const instant = (date, hour) => new Date(`${date}T${hour}:00+05:30`);
 const label = (name, i) => `DEMO ${name} ${i + 1}`;
+const demoNames = [
+  "Asha",
+  "Rohan",
+  "Neha",
+  "Ishaan",
+  "Meera",
+  "Dev",
+  "Anika",
+  "Arnav",
+  "Tara",
+  "Vihaan",
+  "Sanya",
+  "Aditya",
+  "Riya",
+  "Kabir",
+  "Diya",
+  "Neil",
+  "Ira",
+  "Shaurya",
+  "Maya",
+  "Karan",
+  "Kavya",
+  "Reyansh",
+  "Siya",
+  "Parth",
+  "Aarohi",
+  "Ravi",
+  "Ishita",
+  "Rudra",
+  "Aditi",
+  "Sahil",
+  "Tanvi",
+  "Manav",
+  "Juhi",
+  "Nikhil",
+  "Avni",
+  "Yash",
+];
+const demoSurnames = ["Kapoor", "Mehta", "Sharma", "Rao", "Shah", "Verma"];
 function pdfFile(title) {
   return new Promise((resolve, reject) => {
     const pdf = new PDFDocument({ size: "A4", margin: 50 }),
@@ -58,7 +100,9 @@ function pdfFile(title) {
   });
 }
 
-export async function seedDemo() {
+export async function seedDemo({ size = 3 } = {}) {
+  if (!Number.isInteger(size) || size < 3 || size > 36)
+    throw new Error("Use between 3 and 36 demo record groups.");
   if (process.env.NODE_ENV === "production")
     throw new Error("Demo data is restricted to development/test databases.");
   if (!/^[a-f\d]{64}$/i.test(process.env.DOCUMENT_KEY || ""))
@@ -103,15 +147,18 @@ export async function seedDemo() {
     future: day(today, 14),
   };
   const counts = {},
-    records = [];
+    records = [],
+    rows = new Map();
   const session = await mongoose.startSession();
   async function add(model, key, values) {
+    if (rows.has(key)) return rows.get(key);
     const id = oid(key),
       Model = models[model];
     let row = await Model.findById(id).session(session);
     if (!row) {
       [row] = await Model.create([{ _id: id, ...values }], { session });
     }
+    rows.set(key, row);
     records.push({ model, id: String(row._id) });
     counts[model] = (counts[model] || 0) + 1;
     return row;
@@ -128,55 +175,75 @@ export async function seedDemo() {
   try {
     await session.withTransaction(async () => {
       records.length = 0;
+      rows.clear();
       for (const k of Object.keys(counts)) delete counts[k];
-      for (let i = 0; i < 3; i++) {
-        const branch = await add("Organization", `branch:${i}`, {
+      const recipients =
+        size > 3
+          ? [actor]
+          : await models.User.find({ active: true })
+              .populate("role")
+              .session(session);
+      for (let i = 0; i < size; i++) {
+        const variant = i % 3;
+        const branch = await add("Organization", `branch:${variant}`, {
           kind: "branches",
-          code: `DEMO-BR-${i + 1}`,
-          name: label("Office", i),
+          code: `DEMO-BR-${variant + 1}`,
+          name: label("Office", variant),
           description: "Fictional sample branch",
-          address: `Sample office ${i + 1}, demonstration address`,
+          address: `Sample office ${variant + 1}, demonstration address`,
           timezone: "Asia/Kolkata",
         });
-        const department = await add("Organization", `department:${i}`, {
+        const department = await add("Organization", `department:${variant}`, {
           kind: "departments",
-          code: `DEMO-DEP-${i + 1}`,
+          code: `DEMO-DEP-${variant + 1}`,
           name: label(
-            ["Engineering", "People Operations", "Customer Support"][i],
-            i,
+            ["Engineering", "People Operations", "Customer Support"][variant],
+            variant,
           ),
           description: "Sample department for workflow review",
         });
-        const designation = await add("Organization", `designation:${i}`, {
-          kind: "designations",
-          code: `DEMO-DES-${i + 1}`,
-          name: label(["Developer", "HR Executive", "Support Analyst"][i], i),
-          level: i + 1,
-        });
-        const shift = await add("Organization", `shift:${i}`, {
+        const designation = await add(
+          "Organization",
+          `designation:${variant}`,
+          {
+            kind: "designations",
+            code: `DEMO-DES-${variant + 1}`,
+            name: label(
+              ["Developer", "HR Executive", "Support Analyst"][variant],
+              variant,
+            ),
+            level: variant + 1,
+          },
+        );
+        const shift = await add("Organization", `shift:${variant}`, {
           kind: "shifts",
-          code: `DEMO-SH-${i + 1}`,
-          name: label("Shift", i),
-          startTime: ["09:00", "10:00", "11:00"][i],
-          endTime: ["17:00", "18:00", "19:00"][i],
+          code: `DEMO-SH-${variant + 1}`,
+          name: label("Shift", variant),
+          startTime: ["09:00", "10:00", "11:00"][variant],
+          endTime: ["17:00", "18:00", "19:00"][variant],
           graceMinutes: 10,
           timezone: "Asia/Kolkata",
         });
         const employee = await add("Employee", `employee:${i}`, {
           code: `DEMO-EMP-00${i + 1}`,
-          firstName: ["Demo Asha", "Demo Rohan", "Demo Neha"][i],
-          lastName: ["Kapoor", "Mehta", "Sharma"][i],
+          firstName: "Demo " + demoNames[i],
+          lastName: demoSurnames[i % demoSurnames.length],
           email: `demo.employee${i + 1}@example.test`,
           department: department.name,
           departmentId: department._id,
           designation: designation.name,
           designationId: designation._id,
-          branch: "DEMO Office 1",
-          branchId: oid("branch:0"),
-          joiningDate: new Date(dates.start + "T00:00:00Z"),
-          status: i === 2 ? "Probation" : "Active",
-          manager: i ? oid("employee:0") : undefined,
-          dateOfBirth: `199${i}-11-0${i + 2}`,
+          branch: size === 3 ? "DEMO Office 1" : branch.name,
+          branchId: size === 3 ? oid("branch:0") : branch._id,
+          joiningDate: new Date(
+            day(dates.start, size === 3 ? 0 : -30 - i * 29) + "T00:00:00Z",
+          ),
+          status: i % 5 === 2 ? "Probation" : "Active",
+          manager:
+            i === 0
+              ? undefined
+              : oid(`employee:${size > 3 && i > 1 && variant === 1 ? 1 : 0}`),
+          dateOfBirth: `${1990 + (i % 12)}-${month.slice(5)}-${String(2 + (i % 26)).padStart(2, "0")}`,
           address: "Fictional demonstration address",
           employmentType: "Full time",
         });
@@ -188,10 +255,10 @@ export async function seedDemo() {
           role: employeeRole._id,
           active: false,
         });
-        await add("Role", `role:${i}`, {
-          name: label("Read-only role", i),
+        await add("Role", `role:${variant}`, {
+          name: label("Read-only role", variant),
           permissions: [],
-          scope: ["Own", "Department", "Branch"][i],
+          scope: ["Own", "Department", "Branch"][variant],
         });
         await add("ShiftAssignment", `assignment:${i}`, {
           employee: employee._id,
@@ -235,10 +302,13 @@ export async function seedDemo() {
           reason: "DEMO: review a fictional workday correction request",
           status: "Pending",
         });
-        const policy = await add("LeavePolicy", `leave-policy:${i}`, {
-          name: label(["Annual leave", "Personal leave", "Unpaid leave"][i], i),
+        const policy = await add("LeavePolicy", `leave-policy:${variant}`, {
+          name: label(
+            ["Annual leave", "Personal leave", "Unpaid leave"][variant],
+            variant,
+          ),
           annualDays: 12,
-          paid: i !== 2,
+          paid: variant !== 2,
           accrual: "Annual",
           halfDayAllowed: true,
           encashmentAllowed: true,
@@ -294,7 +364,9 @@ export async function seedDemo() {
         });
         const project = await add("Project", `project:${i}`, {
           name: label(
-            ["Website refresh", "Employee portal", "Support improvement"][i],
+            ["Website refresh", "Employee portal", "Support improvement"][
+              variant
+            ],
             i,
           ),
           code: `DEMO-PRJ-00${i + 1}`,
@@ -315,18 +387,21 @@ export async function seedDemo() {
               "Review requirements",
               "Prepare onboarding checklist",
               "Document support workflow",
-            ][i],
+            ][variant],
             i,
           ),
           description:
             "DEMO task: review requirements, update progress and add an attachment.",
           createdBy: actor._id,
-          priority: ["Normal", "High", "Low"][i],
+          priority: ["Normal", "High", "Low"][variant],
           startDate: today,
           dueDate: day(today, 3 + i),
           estimatedMinutes: 120,
           actualMinutes: 0,
-          status: "To Do",
+          status:
+            size === 3
+              ? "To Do"
+              : ["To Do", "In Progress", "On Hold", "Completed"][i % 4],
           history: [
             {
               action: "Created",
@@ -365,13 +440,15 @@ export async function seedDemo() {
               "Information security",
               "Customer communication",
               "Project planning",
-            ][i],
+            ][variant],
             i,
           ),
           course: label("Sample course", i),
           description:
             "Demonstration training with learning progress and skills.",
-          skills: [["Security awareness", "Communication", "Planning"][i]],
+          skills: [
+            ["Security awareness", "Communication", "Planning"][variant],
+          ],
           trainer: "Demo Training Coordinator",
           startDate: today,
           endDate: day(today, 10),
@@ -387,7 +464,7 @@ export async function seedDemo() {
         await add("Skill", `skill:${i}`, {
           employee: employee._id,
           name: label(
-            ["Security awareness", "Communication", "Planning"][i],
+            ["Security awareness", "Communication", "Planning"][variant],
             i,
           ),
           level: 2,
@@ -405,7 +482,7 @@ export async function seedDemo() {
         );
         const travel = await add("Travel", `travel:${i}`, {
           employee: employee._id,
-          destination: label(["Pune", "Mumbai", "Bengaluru"][i], i),
+          destination: label(["Pune", "Mumbai", "Bengaluru"][variant], i),
           purpose: "DEMO: fictional client coordination visit",
           startDate: day(today, 10 + i),
           endDate: day(today, 11 + i),
@@ -432,7 +509,7 @@ export async function seedDemo() {
         const survey = await add("Survey", `survey:${i}`, {
           title: label(
             ["Workplace feedback", "Learning feedback", "Team communication"][
-              i
+              variant
             ],
             i,
           ),
@@ -479,7 +556,7 @@ export async function seedDemo() {
         });
         const job = await add("Job", `job:${i}`, {
           title: label(
-            ["Frontend Developer", "HR Executive", "Support Analyst"][i],
+            ["Frontend Developer", "HR Executive", "Support Analyst"][variant],
             i,
           ),
           department: department.name,
@@ -495,7 +572,7 @@ export async function seedDemo() {
           hiringManager: oid("employee:0"),
         });
         candidates[i] = await add("Candidate", `candidate:${i}`, {
-          name: label(["Arjun Verma", "Priya Shah", "Kabir Rao"][i], i),
+          name: label(["Arjun Verma", "Priya Shah", "Kabir Rao"][variant], i),
           email: `demo.candidate${i + 1}@example.test`,
           job: job._id,
           source: "DEMO sample dataset",
@@ -534,7 +611,7 @@ export async function seedDemo() {
         await add("PeerFeedback", `peer:${i}`, {
           review: review._id,
           employee: employee._id,
-          reviewer: oid(`employee:${(i + 1) % 3}`),
+          reviewer: oid(`employee:${(i + 1) % size}`),
           status: "Requested",
         });
         await add("ImprovementPlan", `improvement:${i}`, {
@@ -557,8 +634,8 @@ export async function seedDemo() {
           status: "Pending",
         });
         const asset = await add("Asset", `asset:${i}`, {
-          name: label(["Laptop", "Monitor", "Printer"][i], i),
-          category: ["Laptop", "Monitor", "Printer"][i],
+          name: label(["Laptop", "Monitor", "Printer"][variant], i),
+          category: ["Laptop", "Monitor", "Printer"][variant],
           serial: `DEMO-ASSET-00${i + 1}`,
           brand: "Demo Brand",
           model: "Sample Model",
@@ -590,7 +667,8 @@ export async function seedDemo() {
           lastWorkingDate: day(today, 45),
           reason:
             "DEMO: fictional exit used to review the offboarding lifecycle",
-          separationType: "Resignation",
+          separationType:
+            size > 3 && i % 6 === 5 ? "Termination" : "Resignation",
           handover:
             "Prepare the sample project handover and return allocated equipment.",
           status: "Requested",
@@ -626,7 +704,7 @@ export async function seedDemo() {
           createdBy: actor._id,
         });
         const nextMonth = new Date(
-          Date.UTC(year, Number(month.slice(5)) + i, 1),
+          Date.UTC(year, Number(month.slice(5)) + variant, 1),
         )
           .toISOString()
           .slice(0, 7);
@@ -713,13 +791,13 @@ export async function seedDemo() {
               "Document clarification",
               "Attendance assistance",
               "Onboarding question",
-            ][i],
+            ][variant],
             i,
           ),
           description:
             "DEMO: fictional request for HR support and workflow review.",
-          category: ["Documents", "Attendance", "HR Policy"][i],
-          priority: ["Normal", "High", "Low"][i],
+          category: ["Documents", "Attendance", "HR Policy"][variant],
+          priority: ["Normal", "High", "Low"][variant],
           status: "Open",
           messages: [],
         });
@@ -729,7 +807,7 @@ export async function seedDemo() {
               "Welcome to the demo workspace",
               "Sample learning session",
               "Sample document reminder",
-            ][i],
+            ][variant],
             i,
           ),
           body: "This is fictional sample content added at your request for checking the HRMS.",
@@ -741,14 +819,15 @@ export async function seedDemo() {
           author: actor._id,
           acknowledgedBy: [],
         });
-        await add("Holiday", `holiday:${i}`, {
-          name: label("Sample holiday", i),
-          date: day(today, 20 + i),
-          branch: "DEMO Office 1",
-          category: "Optional",
-          optional: true,
-          active: true,
-        });
+        if (i < 3)
+          await add("Holiday", `holiday:${i}`, {
+            name: label("Sample holiday", i),
+            date: day(today, 20 + i),
+            branch: "DEMO Office 1",
+            category: "Optional",
+            optional: true,
+            active: true,
+          });
         const workflow = await add("ApprovalWorkflow", `workflow:${i}`, {
           name: label("Sample approval workflow", i),
           module: "Leave",
@@ -767,9 +846,9 @@ export async function seedDemo() {
           history: [],
         });
         await add("ApprovalDelegation", `delegation:${i}`, {
-          module: ["Leave", "Expense", "Travel"][i],
+          module: ["Leave", "Expense", "Travel"][variant],
           from: actor._id,
-          delegate: oid(`user:${(i + 1) % 3}`),
+          delegate: oid(`user:${(i + 1) % size}`),
           startsAt: instant(today, "00:00"),
           endsAt: instant(day(today, 7), "23:00"),
           active: false,
@@ -790,21 +869,18 @@ export async function seedDemo() {
         );
         await add("DocumentTemplate", `template:${i}`, {
           name: label("Sample letter template", i),
-          kind: ["Offer", "Appointment", "Experience"][i],
+          kind: ["Offer", "Appointment", "Experience"][variant],
           body: "DEMONSTRATION ONLY. This sample template for {{employeeName}} contains no legal commitment. Replace it with approved company text before issuing an official letter.",
           active: false,
           createdBy: actor._id,
         });
         await add("ShiftSwap", `swap:${i}`, {
           employee: employee._id,
-          otherEmployee: oid(`employee:${(i + 1) % 3}`),
+          otherEmployee: oid(`employee:${(i + 1) % size}`),
           date: day(today, 4 + i),
           reason: "DEMO: fictional colleague shift-exchange request",
           status: "Requested",
         });
-        const recipients = await models.User.find({ active: true })
-          .populate("role")
-          .session(session);
         for (const recipient of recipients.filter((u) =>
           u.role?.permissions?.some((p) => p === "*" || p === "employee.read"),
         ))
@@ -812,7 +888,7 @@ export async function seedDemo() {
             user: recipient._id,
             title: label("Sample workspace update", i),
             body: "Fictional linked sample records are available for workflow review.",
-            path: ["/employees", "/tasks", "/documents"][i],
+            path: ["/employees", "/tasks", "/documents"][variant],
           });
         await add("Audit", `audit:${i}`, {
           actor: actor._id,
@@ -831,7 +907,7 @@ export async function seedDemo() {
     ? resolve(root, previousStorage)
     : resolve(root, "storage/documents");
   try {
-    for (let i = 0; i < 3; i++)
+    for (let i = 0; i < size; i++)
       for (const [kind, metadata] of Object.entries({
         document: {
           employee: employees[i]._id,
