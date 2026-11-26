@@ -25,6 +25,18 @@ npm run lint
 npm run check:production
 ```
 
+Run integration and browser tests against a local replica set. Set
+`ABCO_TEST_MONGO_PORT` when that replica set is on a port other than
+`27017`. Each suite creates an isolated test database.
+
+Finance can configure effective-dated PF and PT rules, assign them to salary
+structures, and reconcile and export finalized payroll from **PF & PT reports**.
+Use approved wage definitions, policy assignments and rates. TDS uses approved
+deduction inputs. Invoices have separate permissions and record external
+payments. HR can publish versioned policies, track acknowledgements and issue
+employee ID cards through onboarding. Run the normal migration on the intended
+deployment database to provision the new standard permissions and indexes.
+
 Browser checks require the sibling frontend with its dependencies installed. Production checks require real production settings and operator approvals; a local successful start does not certify deployment or statutory payroll.
 
 Scripts, documentation, tests and deployment templates are inside this backend folder. Run `npm run migrate`, `npm run backup:create -- <archive>` and `npm run backup:verify -- <archive>` here. Build the frontend from `../frontend`, serve its `dist/` through HTTPS and proxy `/api/` to this API. PM2: `pm2 start deploy/ecosystem.config.cjs` from this folder.

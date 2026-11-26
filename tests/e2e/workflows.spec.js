@@ -18,7 +18,6 @@ test("expanded HRMS workspaces load real data without browser errors", async ({
     ["/travel", "Travel & visits"],
     ["/surveys", "Employee surveys"],
     ["/recognitions", "Recognition & rewards"],
-    ["/suggestions", "Ideas & suggestions"],
     ["/approval-workflows", "Approval workflows"],
     ["/approvals", "Approval inbox"],
     ["/approval-delegations", "Approval delegation"],
@@ -27,6 +26,11 @@ test("expanded HRMS workspaces load real data without browser errors", async ({
     ["/appraisal-recommendations", "Appraisal recommendations"],
     ["/document-templates", "Document templates"],
     ["/generated-letters", "Official letters"],
+    ["/invoices", "Invoices"],
+    ["/hr-policies", "HR policies"],
+    ["/employee-id-cards", "Employee ID cards"],
+    ["/statutory-rules", "PF & PT rules"],
+    ["/statutory-reports", "PF & PT reports"],
     ["/asset-maintenance", "Asset maintenance"],
     ["/loans", "Loans & salary advances"],
     ["/loan-policies", "Loan & advance policies"],
@@ -64,9 +68,26 @@ async function login(page, employee = false) {
 }
 test("login, dashboard, navigation and logout", async ({ page }) => {
   await login(page);
+  const navigation = page.getByRole("navigation", { name: "Main navigation" });
   await expect(
-    page.getByRole("heading", { name: "System owner controls" }),
+    navigation.getByRole("button", { name: "Payroll & finance" }),
+  ).toHaveAttribute("aria-expanded", "false");
+  await navigation.getByRole("button", { name: "Payroll & finance" }).click();
+  await expect(
+    navigation.getByRole("link", { name: "Invoices", exact: true }),
   ).toBeVisible();
+  await navigation
+    .getByRole("button", { name: "Documents & policies" })
+    .click();
+  await expect(
+    navigation.getByRole("link", { name: "Invoices", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    navigation.getByRole("link", { name: "Notifications", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Logout", exact: true }),
+  ).toHaveCount(1);
   await expect(page.locator(".punch-card")).toHaveCount(0);
   await expect(
     page.getByRole("link", { name: "My profile", exact: true }),
@@ -84,6 +105,9 @@ test("login, dashboard, navigation and logout", async ({ page }) => {
     page.getByRole("button", { name: "My requests", exact: true }),
   ).toHaveCount(0);
   await page.goto("/");
+  await expect(
+    page.getByRole("heading", { name: "Upcoming", exact: true }),
+  ).toBeVisible();
   await page.screenshot({
     path: "test-results/dashboard-desktop.png",
     fullPage: true,
@@ -219,11 +243,13 @@ test("private document upload and authorized download work from the UI", async (
   await dialog
     .getByLabel("Category", { exact: true })
     .selectOption("Employment Letters");
-  await dialog.getByLabel("File (PDF, PNG or JPEG, max 8 MB)").setInputFiles({
-    name: "letter.pdf",
-    mimeType: "application/pdf",
-    buffer: Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF"),
-  });
+  await dialog
+    .getByLabel("File (PDF, DOCX, XLSX, PNG or JPEG, max 8 MB)")
+    .setInputFiles({
+      name: "letter.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF"),
+    });
   await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(dialog).not.toBeVisible();
   const row = page
@@ -259,6 +285,26 @@ test("salary form uses component rows and saves real amounts", async ({
     page.getByRole("row").filter({ hasText: "Alice Tester" }),
   ).toContainText("30,000");
 });
+test("finance creates, filters and downloads an invoice", async ({ page }) => {
+  await login(page);
+  await page.goto("/invoices");
+  await page.getByRole("button", { name: "Create invoice" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Due date").fill("2099-12-31");
+  await dialog.getByLabel("Customer name").fill("Browser Customer");
+  await dialog.getByLabel("Billing address").fill("1 Test Road");
+  await dialog.getByLabel("Item or service").fill("Consulting");
+  await dialog.getByLabel("Unit price (INR)").fill("1250.00");
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.getByLabel("Invoice or customer").fill("Browser Customer");
+  await page.getByRole("button", { name: "Apply filters" }).click();
+  const row = page.getByRole("row").filter({ hasText: "Browser Customer" });
+  await expect(row).toContainText("1,250.00");
+  const pending = page.waitForEvent("download");
+  await row.getByRole("button", { name: "Download PDF" }).click();
+  expect((await pending).suggestedFilename()).toMatch(/^INV-\d{4}-\d{7}\.pdf$/);
+});
 test("mobile layout keeps primary controls and navigation reachable", async ({
   page,
 }) => {
@@ -268,6 +314,7 @@ test("mobile layout keeps primary controls and navigation reachable", async ({
     page.getByRole("button", { name: "Logout", exact: true }).last(),
   ).toBeVisible();
   await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: "People operations" }).click();
   await expect(
     page.getByRole("link", { name: "Assets & equipment", exact: true }),
   ).toBeVisible();

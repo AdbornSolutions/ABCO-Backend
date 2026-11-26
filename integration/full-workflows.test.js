@@ -18,10 +18,13 @@ test("connected operations, payroll and private document workflows", async (t) =
   process.env.SESSION_SECRET = randomBytes(32).toString("hex");
   process.env.DOCUMENT_KEY = randomBytes(32).toString("hex");
   process.env.DOCUMENT_STORAGE_PATH = storageRoot;
-  await mongoose.connect("mongodb://127.0.0.1:27017", {
-    dbName,
-    serverSelectionTimeoutMS: 5000,
-  });
+  await mongoose.connect(
+    `mongodb://127.0.0.1:${process.env.ABCO_TEST_MONGO_PORT || 27017}`,
+    {
+      dbName,
+      serverSelectionTimeoutMS: 5000,
+    },
+  );
   try {
     await Promise.all(
       Object.values(mongoose.models).map((model) => model.init()),

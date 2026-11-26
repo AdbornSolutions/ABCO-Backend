@@ -10,6 +10,7 @@ export const hrPermissions = [
   "employee.read",
   "employee.create",
   "employee.update",
+  "employee.records",
   "employee.archive",
   "attendance.read",
   "attendance.manage",
@@ -27,7 +28,10 @@ export const hrPermissions = [
   "performance.approve",
   "assets.manage",
   "exit.manage",
+  "exit.terminate",
   "documents.manage",
+  "documents.issue",
+  "policies.manage",
   "reports.export",
 ];
 export const defaultRoles = [
@@ -37,6 +41,19 @@ export const defaultRoles = [
     scope: "Company",
   },
   { name: "HR Manager", permissions: hrPermissions, scope: "Company" },
+  {
+    name: "HR Executive",
+    permissions: [
+      "employee.read",
+      "employee.create",
+      "employee.update",
+      "employee.records",
+      "attendance.read",
+      "leave.read",
+      "documents.manage",
+    ],
+    scope: "Company",
+  },
   { name: "Employee", permissions: [], scope: "Own" },
   {
     name: "Payroll / Finance",
@@ -44,6 +61,7 @@ export const defaultRoles = [
       "payroll.view",
       "payroll.process",
       "payroll.release",
+      "invoices.manage",
       "expenses.manage",
       "expenses.approve",
       "expenses.pay",

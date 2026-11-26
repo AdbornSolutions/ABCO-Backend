@@ -29,6 +29,7 @@ import {
   transition,
 } from "../../shared/workflow.js";
 import { notifyEmployee } from "../operations/routes.js";
+import { issueEmployeeCard } from "./id-cards.js";
 
 const hiringTransitions = {
   Applied: ["Screening", "Rejected", "Withdrawn"],
@@ -52,6 +53,37 @@ const exitTransitions = {
   Completed: [],
   Rejected: [],
 };
+async function startExit(req, employeeId, input, action) {
+  return transaction(async (session) => {
+    const employee = await Employee.findOneAndUpdate(
+      { _id: employeeId, status: { $ne: "Archived" } },
+      { $inc: { leaveVersion: 1 } },
+      { session },
+    );
+    if (!employee) fail(409, "Active profile required");
+    if (
+      await Exit.exists({
+        employee: employee._id,
+        status: { $nin: ["Completed", "Rejected"] },
+      }).session(session)
+    )
+      fail(409, "An active exit request already exists");
+    const [record] = await Exit.create(
+      [
+        {
+          ...input,
+          employee: employee._id,
+          history: [
+            { status: "Requested", actor: req.user._id, at: new Date() },
+          ],
+        },
+      ],
+      { session },
+    );
+    await audit(req, action, record.id, session);
+    return record;
+  });
+}
 export function hrRoutes() {
   const router = Router();
   router.get(
@@ -294,18 +326,25 @@ export function hrRoutes() {
     "/onboarding/:id/approve",
     permit("onboarding.manage"),
     async (req, res) => {
-      const record = await Onboarding.findById(req.params.id);
-      if (!record) fail(404, "Onboarding not found");
-      if (
-        !record.checklist.length ||
-        record.checklist.some((item) => !item.done)
-      )
-        fail(409, "Complete every checklist item first");
-      record.status = "Completed";
-      record.approvedBy = req.user._id;
-      record.completedAt ||= new Date();
-      await record.save();
-      await audit(req, "onboarding.completed", record.id);
+      const record = await transaction(async (session) => {
+        const onboarding = await Onboarding.findById(req.params.id).session(
+          session,
+        );
+        if (!onboarding) fail(404, "Onboarding not found");
+        if (onboarding.status === "Completed") return onboarding;
+        if (
+          !onboarding.checklist.length ||
+          onboarding.checklist.some((item) => !item.done)
+        )
+          fail(409, "Complete every checklist item first");
+        onboarding.status = "Completed";
+        onboarding.approvedBy = req.user._id;
+        onboarding.completedAt = new Date();
+        await onboarding.save({ session });
+        await issueEmployeeCard(req, onboarding.employee, session);
+        await audit(req, "onboarding.completed", onboarding.id, session);
+        return onboarding;
+      });
       res.json({ data: record });
     },
   );
@@ -596,8 +635,24 @@ export function hrRoutes() {
       await list(
         Exit,
         can(req.user, "exit.manage")
-          ? {}
-          : { employee: req.user.employee || null },
+          ? { separationType: { $ne: "Termination" } }
+          : {
+              employee: req.user.employee || null,
+              $or: [
+                { separationType: { $ne: "Termination" } },
+                {
+                  status: {
+                    $in: [
+                      "Approved",
+                      "Notice Period",
+                      "Clearance",
+                      "Settlement",
+                      "Completed",
+                    ],
+                  },
+                },
+              ],
+            },
         req,
         { populate: { path: "employee", select: "firstName lastName code" } },
       ),
@@ -617,35 +672,47 @@ export function hrRoutes() {
         "Last workday must follow resignation",
       )
       .parse(req.body);
-    const record = await transaction(async (session) => {
-      const employee = await Employee.findOneAndUpdate(
-        { _id: ownEmployee(req), status: { $ne: "Archived" } },
-        { $inc: { leaveVersion: 1 } },
-        { session },
-      );
-      if (!employee) fail(409, "Active profile required");
-      if (
-        await Exit.exists({
-          employee: employee._id,
-          status: { $nin: ["Completed", "Rejected"] },
-        }).session(session)
+    const record = await startExit(
+      req,
+      ownEmployee(req),
+      input,
+      "exit.requested",
+    );
+    res.status(201).json({ data: record });
+  });
+  router.get("/terminations", permit("exit.terminate"), async (req, res) => {
+    res.json(
+      await list(Exit, { separationType: "Termination" }, req, {
+        populate: { path: "employee", select: "firstName lastName code" },
+      }),
+    );
+  });
+  router.post("/terminations", permit("exit.terminate"), async (req, res) => {
+    const { employee, noticeDate, ...input } = z
+      .object({
+        employee: id,
+        noticeDate: date,
+        lastWorkingDate: date,
+        reason: longText,
+        handover: longText,
+      })
+      .refine(
+        (value) => value.lastWorkingDate >= value.noticeDate,
+        "Last working day cannot precede the notice date",
       )
-        fail(409, "An active exit request already exists");
-      const [exit] = await Exit.create(
-        [
-          {
-            ...input,
-            employee: employee._id,
-            history: [
-              { status: "Requested", actor: req.user._id, at: new Date() },
-            ],
-          },
-        ],
-        { session },
-      );
-      await audit(req, "exit.requested", exit.id, session);
-      return exit;
-    });
+      .parse(req.body);
+    if (String(req.user.employee) === employee)
+      fail(403, "Another authorized person must initiate your termination");
+    const record = await startExit(
+      req,
+      employee,
+      {
+        ...input,
+        separationType: "Termination",
+        resignationDate: noticeDate,
+      },
+      "exit.termination.requested",
+    );
     res.status(201).json({ data: record });
   });
   router.post(
@@ -674,6 +741,18 @@ export function hrRoutes() {
         if (!exit) fail(404, "Exit request not found");
         if (String(exit.employee) === String(req.user.employee))
           fail(403, "Another administrator must review your exit");
+        if (exit.separationType === "Termination") {
+          if (!can(req.user, "exit.terminate"))
+            fail(403, "Termination permission required");
+          if (
+            input.status === "Approved" &&
+            String(exit.history[0]?.actor) === String(req.user._id)
+          )
+            fail(
+              403,
+              "A different authorized person must approve the termination",
+            );
+        }
         if (!transition(exit, input.status, exitTransitions)) return exit;
         if (input.status === "Settlement" || input.status === "Completed") {
           if (

@@ -138,6 +138,11 @@ export function completionRoutes() {
         .parse(req.body);
       const record = await Exit.findById(req.params.id);
       if (!record) fail(404, "Exit not found");
+      if (
+        record.separationType === "Termination" &&
+        !can(req.user, "exit.terminate")
+      )
+        fail(403, "Termination permission required");
       if (["Completed", "Rejected"].includes(record.status))
         fail(409, "Closed exits retain their final interview");
       if (String(record.employee) === String(req.user.employee))

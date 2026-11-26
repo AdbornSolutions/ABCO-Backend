@@ -12,7 +12,7 @@ test("encrypted backup restores BSON and private files into an isolated verifica
     storage = join(directory, "documents"),
     output = join(directory, "archive.abco"),
     key = randomBytes(32),
-    uri = `mongodb://127.0.0.1:27017/${name}`;
+    uri = `mongodb://127.0.0.1:${process.env.ABCO_TEST_MONGO_PORT || 27017}/${name}`;
   const connection = await mongoose.createConnection(uri).asPromise();
   try {
     await mkdir(storage);

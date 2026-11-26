@@ -171,6 +171,7 @@ export const CompanySettings = model(
       timezone: { type: String, default: "Asia/Kolkata" },
       address: String,
       logo: String,
+      authorizedSignatory: String,
       financialYearStartMonth: { type: Number, min: 1, max: 12 },
       requireDailyReport: { type: Boolean, default: false },
       dailyReportDepartments: [String],

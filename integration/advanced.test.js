@@ -29,10 +29,13 @@ test("advanced leave, financial snapshots, documents, imports and reminders", as
   const dbName = `abco_test_${randomUUID().replaceAll("-", "")}`,
     storage = path.resolve("storage", dbName);
   process.env.DOCUMENT_STORAGE_PATH = storage;
-  await mongoose.connect("mongodb://127.0.0.1:27017", {
-    dbName,
-    serverSelectionTimeoutMS: 5000,
-  });
+  await mongoose.connect(
+    `mongodb://127.0.0.1:${process.env.ABCO_TEST_MONGO_PORT || 27017}`,
+    {
+      dbName,
+      serverSelectionTimeoutMS: 5000,
+    },
+  );
   try {
     await Promise.all(
       Object.values(mongoose.models).map((model) => model.init()),

@@ -643,6 +643,7 @@ export function operationsRoutes() {
         .object({
           name: text,
           address: z.string().max(1000).default(""),
+          authorizedSignatory: z.string().trim().max(180).optional(),
           financialYearStartMonth: z.number().int().min(1).max(12).optional(),
           timezone: z.string().refine((v) => {
             try {

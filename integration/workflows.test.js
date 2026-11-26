@@ -23,10 +23,13 @@ test("real MongoDB: authentication, CSRF, employee permissions and attendance", 
   future.setUTCDate(future.getUTCDate() + 7);
   const leaveDate = future.toISOString().slice(0, 10);
   process.env.SESSION_SECRET = randomBytes(32).toString("hex");
-  await mongoose.connect("mongodb://127.0.0.1:27017", {
-    dbName,
-    serverSelectionTimeoutMS: 5000,
-  });
+  await mongoose.connect(
+    `mongodb://127.0.0.1:${process.env.ABCO_TEST_MONGO_PORT || 27017}`,
+    {
+      dbName,
+      serverSelectionTimeoutMS: 5000,
+    },
+  );
   try {
     await Promise.all([
       Role.init(),

@@ -39,10 +39,13 @@ test("final workflows preserve schedules, maintenance history, peer privacy and 
   process.env.NODE_ENV = "test";
   process.env.SESSION_SECRET = randomBytes(32).toString("hex");
   const dbName = `abco_test_${randomUUID().replaceAll("-", "")}`;
-  await mongoose.connect("mongodb://127.0.0.1:27017", {
-    dbName,
-    serverSelectionTimeoutMS: 5000,
-  });
+  await mongoose.connect(
+    `mongodb://127.0.0.1:${process.env.ABCO_TEST_MONGO_PORT || 27017}`,
+    {
+      dbName,
+      serverSelectionTimeoutMS: 5000,
+    },
+  );
   try {
     await Promise.all(
       Object.values(mongoose.models).map((model) => model.init()),

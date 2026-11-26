@@ -14,12 +14,14 @@ import {
 } from "node:crypto";
 import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
-import { can } from "../../security.js";
+import { can, workDate } from "../../security.js";
 import { Task, Ticket } from "../operations/models.js";
 import { Candidate } from "../hr/models.js";
 import { Expense } from "../extended/models.js";
+import { officeFiles, officeMime } from "./office.js";
 import {
   fail,
+  id,
   ownEmployee,
   activeEmployee,
   audit,
@@ -47,6 +49,11 @@ export const Document = scopedModel(
       ticket: { type: mongoose.Schema.Types.ObjectId, ref: "Ticket" },
       name: String,
       category: String,
+      reference: String,
+      template: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "DocumentTemplate",
+      },
       visibility: { type: String, enum: ["Employee", "HR Only"] },
       expiresAt: String,
       status: {
@@ -72,7 +79,7 @@ function key() {
 function root() {
   return path.resolve(process.env.DOCUMENT_STORAGE_PATH || "storage/documents");
 }
-function mime(buffer) {
+function mime(buffer, allowOffice) {
   if (buffer.subarray(0, 5).toString() === "%PDF-") return "application/pdf";
   if (
     buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
@@ -80,15 +87,21 @@ function mime(buffer) {
     return "image/png";
   if (buffer[0] === 255 && buffer[1] === 216 && buffer[2] === 255)
     return "image/jpeg";
+  if (allowOffice) {
+    const type = officeMime(buffer);
+    if (type) return type;
+  }
   fail(
     422,
-    "Only PDF, PNG and JPEG files with valid file signatures are accepted",
+    allowOffice
+      ? "Choose a valid PDF, PNG, JPEG, DOCX or XLSX file"
+      : "Only PDF, PNG and JPEG files with valid file signatures are accepted",
   );
 }
-async function save(file, actor) {
+async function save(file, actor, allowOffice = false) {
   if (!file) fail(422, "Choose a file");
   const encryptionKey = key(),
-    type = mime(file.buffer),
+    type = mime(file.buffer, allowOffice),
     iv = randomBytes(12),
     cipher = createCipheriv("aes-256-gcm", encryptionKey, iv);
   const encrypted = Buffer.concat([cipher.update(file.buffer), cipher.final()]);
@@ -141,7 +154,8 @@ async function access(req, record) {
     return;
   if (
     !manager(req) &&
-    (String(record.employee) !== String(req.user.employee) ||
+    (!req.user.employee ||
+      String(record.employee) !== String(req.user.employee) ||
       record.visibility === "HR Only")
   )
     fail(403, "Document access denied");
@@ -150,10 +164,12 @@ const metadata = z.object({
   name: z.string().trim().min(1).max(150),
   category: z.enum([
     "Identity Documents",
+    "Employee Photograph",
     "Employment Letters",
     "Educational Certificates",
     "Experience Certificates",
     "HR Policies",
+    "Form 16",
     "Other Records",
   ]),
   visibility: z.enum(["Employee", "HR Only"]).default("Employee"),
@@ -277,23 +293,56 @@ export function documentRoutes() {
       ),
     });
   });
-  router.get("/documents", async (req, res) =>
+  router.get("/documents", async (req, res) => {
+    const { employee, status, search, expiry } = z
+      .object({
+        employee: id.optional(),
+        status: z.enum(["Pending", "Verified", "Rejected"]).optional(),
+        search: z.string().trim().max(100).optional(),
+        expiry: z.enum(["Expired", "Next 30 days"]).optional(),
+      })
+      .parse(req.query);
+    if (!manager(req) && !req.user.employee)
+      return res.json({
+        data: [],
+        meta: { page: 1, limit: 20, total: 0, pages: 0 },
+      });
+    const filter = manager(req)
+      ? employee
+        ? { employee }
+        : {}
+      : { employee: req.user.employee || null, visibility: "Employee" };
+    if (status) filter.status = status;
+    if (search) {
+      const match = { $regex: RegExp.escape(search), $options: "i" };
+      filter.$or = [{ name: match }, { category: match }];
+    }
+    if (expiry) {
+      const today = workDate();
+      filter.expiresAt =
+        expiry === "Expired"
+          ? { $gt: "", $lt: today }
+          : {
+              $gte: today,
+              $lte: workDate(new Date(Date.now() + 30 * 86400000)),
+            };
+    }
     res.json(
-      await list(
-        Document,
-        manager(req)
-          ? {}
-          : { employee: req.user.employee || null, visibility: "Employee" },
-        req,
-        {
-          populate: { path: "employee", select: "firstName lastName code" },
-          select: "-versions.key",
-        },
-      ),
-    ),
-  );
+      await list(Document, filter, req, {
+        populate: { path: "employee", select: "firstName lastName code" },
+        select: "-versions.key",
+      }),
+    );
+  });
   router.post("/documents", upload, async (req, res) => {
     const input = metadata.parse(req.body);
+    if (input.category === "Form 16" && !manager(req))
+      fail(403, "Only HR can upload an issued Form 16");
+    if (
+      input.category === "Form 16" &&
+      !req.file?.buffer.subarray(0, 5).equals(Buffer.from("%PDF-"))
+    )
+      fail(422, "Upload the issued Form 16 as a PDF");
     const employee = manager(req)
       ? z
           .string()
@@ -303,7 +352,7 @@ export function documentRoutes() {
     await activeEmployee(employee);
     if (!manager(req) && input.visibility === "HR Only")
       fail(403, "Employees can upload only their own visible documents");
-    const version = await save(req.file, req.user._id);
+    const version = await save(req.file, req.user._id, true);
     let record;
     try {
       record = await Document.create({
@@ -323,7 +372,19 @@ export function documentRoutes() {
   router.post("/documents/:id/versions", upload, async (req, res) => {
     const record = await Document.findById(req.params.id);
     await access(req, record);
-    const version = await save(req.file, req.user._id);
+    if (record.template) fail(409, "Issued letters require a new issuance");
+    if (record.category === "Form 16" && !manager(req))
+      fail(403, "Only HR can replace an issued Form 16");
+    if (
+      record.category === "Form 16" &&
+      !req.file?.buffer.subarray(0, 5).equals(Buffer.from("%PDF-"))
+    )
+      fail(422, "Upload the issued Form 16 as a PDF");
+    const version = await save(
+      req.file,
+      req.user._id,
+      Boolean(record.employee && !record.task && !record.ticket),
+    );
     record.versions.push(version);
     record.status = "Pending";
     try {
@@ -388,24 +449,14 @@ export function documentRoutes() {
       .digest("hex");
     if (!timingSafeEqual(Buffer.from(expected), Buffer.from(signature)))
       fail(403, "Invalid download signature");
-    if (!/^[a-f\d-]{36}$/i.test(version.key))
-      fail(500, "Invalid storage reference");
-    const data = await readFile(path.join(root(), version.key));
-    const decipher = createDecipheriv(
-      "aes-256-gcm",
-      key(),
-      data.subarray(0, 12),
-    );
-    decipher.setAuthTag(data.subarray(12, 28));
-    const plain = Buffer.concat([
-      decipher.update(data.subarray(28)),
-      decipher.final(),
-    ]);
+    const plain = await readStoredVersion(version);
     await audit(req, "document.downloaded", record.id);
     const extension = {
       "application/pdf": "pdf",
       "image/png": "png",
       "image/jpeg": "jpg",
+      [officeFiles.docx]: "docx",
+      [officeFiles.xlsx]: "xlsx",
     }[version.mime];
     res
       .set({
@@ -417,4 +468,13 @@ export function documentRoutes() {
       .send(plain);
   });
   return router;
+}
+
+export async function readStoredVersion(version) {
+  if (!/^[a-f\d-]{36}$/i.test(version.key))
+    fail(500, "Invalid storage reference");
+  const data = await readFile(path.join(root(), version.key));
+  const decipher = createDecipheriv("aes-256-gcm", key(), data.subarray(0, 12));
+  decipher.setAuthTag(data.subarray(12, 28));
+  return Buffer.concat([decipher.update(data.subarray(28)), decipher.final()]);
 }

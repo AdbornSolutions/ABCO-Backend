@@ -1,4 +1,21 @@
-# Release status - 2 November 2026
+# Release status
+
+## 26 November 2026
+
+- Finance has invoices, payment recording, effective-dated PF/PT rules, and
+  reconciled reports from finalized payroll.
+- HR has private employee background records, policy drafts and acknowledgements,
+  onboarding ID cards, a separate termination workflow, and versioned official
+  letter templates with PDF preview and authorized issuance.
+- The document inventory supports search, expiry filters, version downloads,
+  DOCX/XLSX uploads, and storage of issued Form 16 PDFs.
+
+Remaining release work includes automated annual TDS and statutory filing,
+certificate-backed PDF signing, employer-specific statutory approval, and
+live infrastructure verification. Review and apply the deployment migration
+to grant the new permissions on the target environment.
+
+## 2 November 2026 baseline
 
 The verified local build is stable for evaluation. The complete 493-function enterprise scope is **not production complete**. Audit totals: Working: 436; Blocked: 12; Partially Working: 45. Partial entries still include implementation/verification work; blocked entries include statutory engines that are not implemented.
 

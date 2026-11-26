@@ -4,25 +4,14 @@ import mongoose from "mongoose";
 import { randomBytes } from "node:crypto";
 import { readFileSync, appendFileSync } from "node:fs";
 import { Role, Audit } from "../src/models.js";
-import {
-  defaultRoles,
-  hrPermissions,
-} from "../src/shared/default-roles.js";
+import { defaultRoles, hrPermissions } from "../src/shared/default-roles.js";
 dotenv.config({ path: ".env", quiet: true });
 if (!process.env.DOCUMENT_KEY) {
-  appendFileSync(
-    ".env",
-    `\nDOCUMENT_KEY=${randomBytes(32).toString("hex")}\n`,
-  );
-  console.log(
-    "Generated a private document encryption key in ignored .env.",
-  );
+  appendFileSync(".env", `\nDOCUMENT_KEY=${randomBytes(32).toString("hex")}\n`);
+  console.log("Generated a private document encryption key in ignored .env.");
 }
 if (!process.env.BACKUP_KEY) {
-  appendFileSync(
-    ".env",
-    `\nBACKUP_KEY=${randomBytes(32).toString("hex")}\n`,
-  );
+  appendFileSync(".env", `\nBACKUP_KEY=${randomBytes(32).toString("hex")}\n`);
   console.log(
     "Generated a separate private backup encryption key in ignored .env.",
   );
@@ -33,6 +22,21 @@ try {
   const result = await Role.updateOne(
     { name: "HR Manager" },
     { $addToSet: { permissions: { $each: grants } } },
+  );
+  await Role.updateOne(
+    { name: "Admin", scope: "Company" },
+    {
+      $addToSet: {
+        permissions: {
+          $each: [
+            "policies.manage",
+            "exit.terminate",
+            "employee.records",
+            "documents.issue",
+          ],
+        },
+      },
+    },
   );
   await Role.updateOne(
     { name: "Payroll / Finance" },

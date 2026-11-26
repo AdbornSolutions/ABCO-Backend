@@ -3,7 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 import PDFDocument from "pdfkit";
 import { Employee } from "../../models.js";
-import { Candidate, Job } from "../hr/models.js";
+import { Candidate, Exit, Job } from "../hr/models.js";
 import { CompanySettings } from "../operations/models.js";
 import { Document, storeDocument, grantDocumentLink } from "./routes.js";
 import {
@@ -14,8 +14,22 @@ import {
   permit,
   audit,
   list,
+  transaction,
 } from "../../shared/workflow.js";
 import { can, workDate } from "../../security.js";
+const letterKinds = [
+  "Offer",
+  "Appointment",
+  "Experience",
+  "Relieving",
+  "Warning",
+  "Termination",
+];
+const templateInput = z.object({
+  name: text,
+  kind: z.enum(letterKinds),
+  body: z.string().trim().min(20).max(20000),
+});
 export const DocumentTemplate = mongoose.model(
   "DocumentTemplate",
   new mongoose.Schema(
@@ -23,22 +37,29 @@ export const DocumentTemplate = mongoose.model(
       name: String,
       kind: {
         type: String,
-        enum: ["Offer", "Appointment", "Experience", "Relieving"],
+        enum: letterKinds,
       },
       body: String,
+      version: { type: Number, default: 1 },
+      previous: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "DocumentTemplate",
+      },
       active: { type: Boolean, default: true },
       createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     },
-    { timestamps: true, strict: "throw" },
+    { timestamps: true, strict: "throw", optimisticConcurrency: true },
   ),
 );
-function pdfBuffer(company, title, body) {
+function pdfBuffer(company, title, body, reference) {
   return new Promise((resolve, reject) => {
     const pdf = new PDFDocument({ margin: 55, size: "A4" }),
       parts = [];
     pdf.on("data", (chunk) => parts.push(chunk));
     pdf.on("end", () => resolve(Buffer.concat(parts)));
     pdf.on("error", reject);
+    const logo = company.logo?.match(/^data:image\/png;base64,(.+)$/);
+    if (logo) pdf.image(Buffer.from(logo[1], "base64"), { fit: [96, 50] });
     pdf
       .fillColor("#0B1F3A")
       .fontSize(23)
@@ -46,7 +67,10 @@ function pdfBuffer(company, title, body) {
     if (company.address)
       pdf.fillColor("#64748B").fontSize(9).text(company.address);
     pdf.moveDown(2).fillColor("#0B1F3A").fontSize(17).text(title);
+    pdf.fontSize(9).fillColor("#64748B").text(reference);
     pdf.moveDown().fillColor("#101828").fontSize(11).text(body, { lineGap: 5 });
+    if (company.authorizedSignatory)
+      pdf.moveDown(2).font("Helvetica-Bold").text(company.authorizedSignatory);
     pdf.end();
   });
 }
@@ -61,18 +85,44 @@ export function letterRoutes() {
     "/document-templates",
     permit("documents.manage"),
     async (req, res) => {
-      const input = z
-        .object({
-          name: text,
-          kind: z.enum(["Offer", "Appointment", "Experience", "Relieving"]),
-          body: z.string().trim().min(20).max(20000),
-        })
-        .parse(req.body);
+      const input = templateInput.parse(req.body);
       const record = await DocumentTemplate.create({
         ...input,
         createdBy: req.user._id,
       });
       await audit(req, "document.template.created", record.id);
+      res.status(201).json({ data: record });
+    },
+  );
+  router.patch(
+    "/document-templates/:id",
+    permit("documents.manage"),
+    async (req, res) => {
+      const identifier = id.parse(req.params.id);
+      const input = templateInput.parse(req.body);
+      const record = await transaction(async (session) => {
+        const previous = await DocumentTemplate.findOne({
+          _id: identifier,
+          active: true,
+        }).session(session);
+        if (!previous)
+          fail(409, "Only the active template version can be revised");
+        previous.active = false;
+        await previous.save({ session });
+        const [next] = await DocumentTemplate.create(
+          [
+            {
+              ...input,
+              version: (previous.version || 1) + 1,
+              previous: previous._id,
+              createdBy: req.user._id,
+            },
+          ],
+          { session },
+        );
+        await audit(req, "document.template.revised", next.id, session);
+        return next;
+      });
       res.status(201).json({ data: record });
     },
   );
@@ -99,12 +149,7 @@ export function letterRoutes() {
           Document,
           {
             category: {
-              $in: [
-                "Offer Letter",
-                "Appointment Letter",
-                "Experience Letter",
-                "Relieving Letter",
-              ],
+              $in: letterKinds.map((kind) => kind + " Letter"),
             },
           },
           req,
@@ -127,6 +172,7 @@ export function letterRoutes() {
           template: id,
           employee: id.optional(),
           candidate: id.optional(),
+          preview: z.boolean().default(false),
           custom: z
             .record(z.string().min(1).max(80), z.string().max(1000))
             .default({}),
@@ -136,6 +182,8 @@ export function letterRoutes() {
           "Choose either an employee or a candidate",
         )
         .parse(req.body);
+      if (!input.preview && !can(req.user, "documents.issue"))
+        fail(403, "Issuing a letter requires document issue permission");
       const template = await DocumentTemplate.findOne({
         _id: input.template,
         active: true,
@@ -151,6 +199,34 @@ export function letterRoutes() {
         owner = await Employee.findById(input.employee);
         if (!owner) fail(404, "Employee not found");
         if (
+          ["Warning", "Termination"].includes(template.kind) &&
+          String(owner._id) === String(req.user.employee)
+        )
+          fail(403, "A different authorized person must issue this letter");
+        const termination =
+          template.kind === "Termination"
+            ? await Exit.findOne({
+                employee: owner._id,
+                separationType: "Termination",
+                status: {
+                  $in: [
+                    "Approved",
+                    "Notice Period",
+                    "Clearance",
+                    "Settlement",
+                    "Completed",
+                  ],
+                },
+              })
+                .select("resignationDate lastWorkingDate")
+                .sort({ createdAt: -1 })
+            : null;
+        if (template.kind === "Termination" && !termination)
+          fail(
+            409,
+            "The termination must be approved before issuing its letter",
+          );
+        if (
           ["Experience", "Relieving"].includes(template.kind) &&
           owner.status !== "Archived"
         )
@@ -160,8 +236,10 @@ export function letterRoutes() {
           employeeCode: owner.code,
           department: owner.department,
           designation: owner.designation,
-          joiningDate: owner.joiningDate.toISOString().slice(0, 10),
-          lastWorkingDate: owner.lastWorkingDate || "",
+          joiningDate: owner.joiningDate?.toISOString().slice(0, 10) || "",
+          lastWorkingDate:
+            termination?.lastWorkingDate || owner.lastWorkingDate || "",
+          noticeDate: termination?.resignationDate || "",
         };
       } else {
         if (template.kind !== "Offer" || !can(req.user, "recruitment.manage"))
@@ -186,6 +264,7 @@ export function letterRoutes() {
         ...canonical,
         companyName: company.name,
         companyAddress: company.address || "",
+        authorizedSignatory: company.authorizedSignatory || "",
         date: workDate(),
       };
       const body = template.body.replace(
@@ -196,21 +275,37 @@ export function letterRoutes() {
           return values[key];
         },
       );
-      const buffer = await pdfBuffer(company, template.kind + " letter", body),
-        document = await storeDocument(
-          req,
-          {
-            ...(input.employee
-              ? { employee: owner._id }
-              : { candidate: owner._id }),
-            name: `${template.kind} letter · ${input.employee ? canonical.employeeName : owner.name}`,
-            category: template.kind + " Letter",
-            visibility: input.employee ? "Employee" : "HR Only",
-          },
-          { buffer, size: buffer.length },
-        );
+      const documentId = new mongoose.Types.ObjectId();
+      const reference = "HR-" + documentId.toString().toUpperCase();
+      const buffer = await pdfBuffer(
+        company,
+        template.kind + " letter",
+        body,
+        input.preview ? "PREVIEW" : reference,
+      );
+      if (input.preview) {
+        await audit(req, "document.letter.previewed", template.id);
+        return res.type("pdf").attachment("letter-preview.pdf").send(buffer);
+      }
+      const document = await storeDocument(
+        req,
+        {
+          _id: documentId,
+          reference,
+          template: template._id,
+          ...(input.employee
+            ? { employee: owner._id }
+            : { candidate: owner._id }),
+          name: `${template.kind} letter · ${input.employee ? canonical.employeeName : owner.name}`,
+          category: template.kind + " Letter",
+          visibility: input.employee ? "Employee" : "HR Only",
+        },
+        { buffer, size: buffer.length },
+      );
       await audit(req, "document.letter.generated", document.id);
-      res.status(201).json({ data: { id: document.id, name: document.name } });
+      res
+        .status(201)
+        .json({ data: { id: document.id, name: document.name, reference } });
     },
   );
   return router;

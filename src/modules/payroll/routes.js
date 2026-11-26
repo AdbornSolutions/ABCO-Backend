@@ -20,6 +20,11 @@ import {
 } from "../../shared/workflow.js";
 import { notifyEmployee } from "../operations/routes.js";
 import { calculateSalary, toPaise } from "./calculator.js";
+import {
+  applyStatutoryRules,
+  resolveStatutoryRules,
+  ruleCode,
+} from "./statutory-rules.js";
 
 const amount = z
   .string()
@@ -87,6 +92,8 @@ export function payrollRoutes() {
         .object({
           employee: id,
           overtimeRate: amount.default("0"),
+          pfRule: ruleCode.optional(),
+          ptRule: ruleCode.optional(),
           effectiveDate: z.iso
             .date()
             .refine(
@@ -105,6 +112,7 @@ export function payrollRoutes() {
           { session, new: true },
         );
         if (!employee) fail(422, "Choose an active employee");
+        await resolveStatutoryRules(input, input.effectiveDate, session);
         if (
           await PayrollPeriod.exists({
             startDate: { $gte: input.effectiveDate },
@@ -188,6 +196,7 @@ export function payrollRoutes() {
           fail(409, "Configure at least one applicable salary structure");
         const periodDays = Number(period.endDate.slice(-2));
         const entries = [];
+        const rulesByCode = new Map();
         for (const [employeeId, salary] of latest) {
           const employee = await Employee.findOneAndUpdate(
             { _id: employeeId },
@@ -306,8 +315,23 @@ export function payrollRoutes() {
             adjustment.appliedPeriod = period._id;
             await adjustment.save({ session });
           }
+          const codes = `${salary.pfRule || ""}:${salary.ptRule || ""}`;
+          if (!rulesByCode.has(codes))
+            rulesByCode.set(
+              codes,
+              await resolveStatutoryRules(salary, period.startDate, session),
+            );
+          const statutorySnapshot = applyStatutoryRules(
+            calculation,
+            rulesByCode.get(codes),
+            Number(period.month.slice(5)),
+            employee.code,
+          );
           if (calculation.net < 0)
-            fail(422, "Approved adjustments would create negative net salary");
+            fail(
+              422,
+              "Deductions and adjustments would create negative net salary",
+            );
           const loanDeductions = await reserveLoanRecoveries(
             employee._id,
             period,
@@ -331,6 +355,7 @@ export function payrollRoutes() {
               ? { bankName: bank.bankName, maskedAccount: bank.maskedAccount }
               : undefined,
             overtimeMinutes,
+            statutorySnapshot,
             adjustmentIds: adjustments.map((a) => a._id),
             period: period._id,
             employee: employee._id,
@@ -345,6 +370,8 @@ export function payrollRoutes() {
               effectiveDate: salary.effectiveDate,
               currency: salary.currency,
               overtimeRate: salary.overtimeRate,
+              pfRule: salary.pfRule,
+              ptRule: salary.ptRule,
               earnings: salary.earnings,
               deductions: salary.deductions,
               employerContributions: salary.employerContributions,
