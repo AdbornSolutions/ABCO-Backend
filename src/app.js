@@ -58,6 +58,7 @@ import { createInitialAdmin } from "./setup.js";
 import { operationsRoutes } from "./modules/operations/routes.js";
 import { hrRoutes } from "./modules/hr/routes.js";
 import { payrollRoutes } from "./modules/payroll/routes.js";
+import { individualPayslipRoutes } from "./modules/payroll/individual-payslips.js";
 import { statutoryReportRoutes } from "./modules/payroll/statutory-reports.js";
 import { statutoryRuleRoutes } from "./modules/payroll/statutory-rules.js";
 import { documentRoutes } from "./modules/documents/routes.js";
@@ -702,6 +703,7 @@ export function createApp({
   api.use(letterRoutes());
   api.use(assetMaintenanceRoutes());
   api.use(payrollRoutes());
+  api.use(individualPayslipRoutes());
   api.use(statutoryReportRoutes());
   api.use(statutoryRuleRoutes());
   api.use(financeRoutes());

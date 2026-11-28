@@ -1,4 +1,5 @@
 import { startReminderWorker } from "./modules/operations/reminders.js";
+import { startMonthlyPayslipWorker } from "./modules/payroll/individual-payslips.js";
 import "dotenv/config";
 import mongoose from "mongoose";
 import { createApp } from "./app.js";
@@ -10,6 +11,7 @@ await mongoose.connect(process.env.MONGODB_URI, {
 });
 const stopEmailWorker = startEmailWorker();
 const stopReminders = startReminderWorker();
+const stopMonthlyPayslips = startMonthlyPayslipWorker();
 const server = createApp({
   sessionCookieName: process.env.SESSION_COOKIE_NAME || undefined,
 }).listen(
@@ -22,6 +24,7 @@ for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () => {
     stopEmailWorker();
     stopReminders();
+    stopMonthlyPayslips();
     server.close(async () => {
       await mongoose.disconnect();
       process.exit(0);
